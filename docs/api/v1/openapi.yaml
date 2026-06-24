@@ -1,0 +1,690 @@
+openapi: 3.1.0
+info:
+  title: Hubfy REST API v1
+  version: 1.0.0
+  description: |
+    Public REST API for the Hubfy platform — resource-oriented, tenant-scoped.
+
+    ## Base URL
+
+    All requests are sent to `https://api.hubfy.io/functions/v1/api`.
+
+    ## Authentication
+
+    All endpoints require `Authorization: Bearer <token>` with either:
+    - **API Key** — `sk_live_<hex>`, created in *Settings → Developer*. The tenant is resolved from the key itself.
+    - **JWT** — a Supabase Auth session token. When using JWTs, you must also send the `X-Hubfy-Workspace-Id` header with the target workspace UUID.
+
+    ## Response shapes
+
+    Collections:
+    ```json
+    { "data": [ { "id": "cust_...", ... } ], "meta": { "page": 1, "per_page": 50, "total": 231, "has_more": true } }
+    ```
+
+    Resources return the object directly. `DELETE` returns `{ "deleted": true, "id": "<public_id>" }`.
+
+    Errors:
+    ```json
+    { "error": { "code": "customer_not_found", "message": "Customer not found" } }
+    ```
+
+    ## Identifiers
+
+    Every resource is identified in URLs by its `public_id` (prefix + hex):
+    - Customers: `cust_*`
+    - Products: `prod_*`
+    - Orders: `ordr_*`
+
+    ## Pagination
+
+    All list endpoints accept `?page` (1-based, default `1`) and `?per_page`
+    (default `50`, max `100`).
+
+    ## Idempotency
+
+    `POST /v1/orders` accepts an optional `Idempotency-Key` header. If a
+    previous request succeeded with the same key, the stored result is
+    replayed instead of creating a duplicate.
+
+  contact:
+    name: Hubfy
+    url: https://hubfy.io
+  license:
+    name: Proprietary
+    url: https://hubfy.io/terms
+
+servers:
+  - url: https://api.hubfy.io/functions/v1/api
+    description: Production
+
+tags:
+  - name: Customers
+    description: Tenant customers — list, fetch, create, update, delete.
+  - name: Products
+    description: Sellable products — list, fetch, create, update, delete.
+  - name: Orders
+    description: Purchase records — list, fetch, create (external sync), update status.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /v1/customers:
+    get:
+      tags: [Customers]
+      operationId: listCustomers
+      summary: List customers
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - in: query
+          name: search
+          schema: { type: string }
+          description: Matches name or email (ILIKE).
+        - in: query
+          name: email
+          schema: { type: string, format: email }
+        - in: query
+          name: email_marketing_status
+          schema:
+            type: string
+            enum: [subscribed, unsubscribed, archived, requires_verification, invalid_email, bounced]
+      responses:
+        '200':
+          description: Customer collection
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Customer' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+    post:
+      tags: [Customers]
+      operationId: createCustomer
+      summary: Create customer
+      description: |
+        Permissive upsert — if a customer with the same `(tenant, email)` already
+        exists, its empty fields are filled in and the existing record is returned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CustomerCreate' }
+      responses:
+        '200':
+          description: Existing customer was returned (upsert hit)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Customer' }
+        '201':
+          description: Customer created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Customer' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/customers/{id}:
+    parameters:
+      - $ref: '#/components/parameters/CustomerId'
+    get:
+      tags: [Customers]
+      operationId: getCustomer
+      summary: Fetch customer
+      responses:
+        '200':
+          description: Customer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Customer' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Customers]
+      operationId: updateCustomer
+      summary: Update customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CustomerUpdate' }
+      responses:
+        '200':
+          description: Updated customer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Customer' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Customers]
+      operationId: deleteCustomer
+      summary: Delete customer
+      description: |
+        Hard-deletes the customer. Existing orders are preserved — `customer_id`
+        becomes `null` but `customer_email_snapshot` / `customer_name_snapshot`
+        retain identity for historical reports.
+      responses:
+        '200':
+          description: Customer deleted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeletedResponse' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/products:
+    get:
+      tags: [Products]
+      operationId: listProducts
+      summary: List products
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - in: query
+          name: search
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string, enum: [draft, active, archived] }
+        - in: query
+          name: benefit
+          schema: { type: string, enum: [files, courses, links] }
+      responses:
+        '200':
+          description: Product collection
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Product' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+    post:
+      tags: [Products]
+      operationId: createProduct
+      summary: Create product
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductCreate' }
+      responses:
+        '201':
+          description: Product created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/products/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProductId'
+    get:
+      tags: [Products]
+      operationId: getProduct
+      summary: Fetch product
+      responses:
+        '200':
+          description: Product
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Products]
+      operationId: updateProduct
+      summary: Update product
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProductUpdate' }
+      responses:
+        '200':
+          description: Updated product
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Products]
+      operationId: archiveProduct
+      summary: Archive product
+      description: |
+        Flips the product's `status` to `archived`. The row is kept so that
+        historical orders still resolve a product name. Mirrors the Stripe
+        model — products and prices are never hard-deleted.
+
+        To reactivate an archived product, call `PATCH /v1/products/:id` with
+        `{"status": "active"}`.
+      responses:
+        '200':
+          description: Product archived
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ArchivedResponse' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/orders:
+    get:
+      tags: [Orders]
+      operationId: listOrders
+      summary: List orders
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PerPage'
+        - in: query
+          name: search
+          schema: { type: string }
+          description: Matches gateway_external_id or customer snapshot (name/email).
+        - in: query
+          name: status
+          schema: { type: string, enum: [pending, completed, approved, refunded, cancelled] }
+        - in: query
+          name: source
+          schema: { type: string }
+          description: e.g. `custom`, `hubfy`, `csv_import`, `external_gateway`.
+        - in: query
+          name: customer_id
+          schema: { type: string, pattern: '^cust_[a-z0-9]+$' }
+        - in: query
+          name: product_id
+          schema: { type: string, pattern: '^prod_[a-z0-9]+$' }
+        - in: query
+          name: start_at
+          schema: { type: string, format: date-time }
+          description: Inclusive lower bound on `effective_order_at`.
+        - in: query
+          name: end_at
+          schema: { type: string, format: date-time }
+          description: Exclusive upper bound on `effective_order_at`.
+      responses:
+        '200':
+          description: Order collection
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Order' }
+                  meta: { $ref: '#/components/schemas/PaginationMeta' }
+    post:
+      tags: [Orders]
+      operationId: createOrder
+      summary: Create order (external sync)
+      description: |
+        Creates a manual order. Intended for importing purchases from external
+        systems (ERPs, old platforms, migrations). `source` is forced to `"custom"`.
+
+        Provide either `customer_id` (`cust_*`) or `customer_email`. When only
+        `customer_email` is given and no matching customer exists, one is
+        created automatically.
+
+        The `Idempotency-Key` header prevents duplicates on retry.
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string }
+          description: Client-supplied key. Same key ⇒ same order returned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderCreate' }
+      responses:
+        '200':
+          description: Idempotent replay — existing order returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '201':
+          description: Order created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/orders/{id}:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    get:
+      tags: [Orders]
+      operationId: getOrder
+      summary: Fetch order
+      responses:
+        '200':
+          description: Order
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Orders]
+      operationId: updateOrder
+      summary: Update order status
+      description: |
+        Only `status` (completed / approved / refunded / cancelled) and
+        `effective_order_at` are editable. Orders are financial records —
+        DELETE is intentionally not exposed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderUpdate' }
+      responses:
+        '200':
+          description: Updated order
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Order' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        `sk_live_<hex>` API key or a Supabase Auth JWT.
+        For JWTs, also send `X-Hubfy-Workspace-Id: <uuid>`.
+
+  parameters:
+    Page:
+      in: query
+      name: page
+      schema: { type: integer, minimum: 1, default: 1 }
+    PerPage:
+      in: query
+      name: per_page
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    CustomerId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, pattern: '^cust_[a-z0-9]+$' }
+      example: cust_f3a8b9c1d4e2
+    ProductId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, pattern: '^prod_[a-z0-9]+$' }
+      example: prod_9f20e7a3b8c1
+    OrderId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, pattern: '^ordr_[a-z0-9]+$' }
+      example: ordr_1a2b3c4d5e6f
+
+  responses:
+    BadRequest:
+      description: Invalid payload
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+  schemas:
+    PaginationMeta:
+      type: object
+      required: [page, per_page, total, has_more]
+      properties:
+        page:     { type: integer, example: 1 }
+        per_page: { type: integer, example: 50 }
+        total:    { type: integer, example: 231 }
+        has_more: { type: boolean, example: true }
+
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: customer_not_found
+            message:
+              type: string
+              example: Customer not found
+            details:
+              type: object
+              additionalProperties: true
+
+    DeletedResponse:
+      type: object
+      required: [deleted, id]
+      properties:
+        deleted: { type: boolean, example: true }
+        id:      { type: string, example: cust_f3a8b9c1d4e2 }
+
+    ArchivedResponse:
+      type: object
+      required: [archived, id, status]
+      properties:
+        archived: { type: boolean, example: true }
+        id:       { type: string, example: prod_9f20e7a3b8c1 }
+        status:   { type: string, example: archived }
+
+    Customer:
+      type: object
+      required: [id, email, name, created_at]
+      properties:
+        id:                     { type: string, example: cust_f3a8b9c1d4e2 }
+        email:                  { type: string, format: email }
+        name:                   { type: string }
+        first_name:             { type: string, nullable: true }
+        last_name:              { type: string, nullable: true }
+        phone:                  { type: string, nullable: true }
+        document:               { type: string, nullable: true }
+        document_type:
+          type: string
+          nullable: true
+          enum: [CPF, CNPJ, PASSPORT, DNI, ID, RUT, EIN, VAT, null]
+        city:                   { type: string, nullable: true }
+        region:                 { type: string, nullable: true }
+        country:                { type: string, nullable: true }
+        email_marketing_status:
+          type: string
+          enum: [subscribed, unsubscribed, archived, requires_verification, invalid_email, bounced]
+        total_revenue_cents:    { type: integer }
+        mrr_cents:              { type: integer }
+        currency:               { type: string, example: BRL }
+        external_id:            { type: string, nullable: true }
+        created_at:             { type: string, format: date-time }
+        updated_at:             { type: string, format: date-time }
+
+    CustomerCreate:
+      type: object
+      required: [email, name]
+      properties:
+        email:                  { type: string, format: email }
+        name:                   { type: string }
+        first_name:             { type: string }
+        last_name:              { type: string }
+        phone:                  { type: string }
+        document:               { type: string }
+        document_type:          { type: string, enum: [CPF, CNPJ, PASSPORT, DNI, ID, RUT, EIN, VAT] }
+        city:                   { type: string }
+        region:                 { type: string }
+        country:                { type: string }
+        email_marketing_status:
+          type: string
+          enum: [subscribed, unsubscribed, archived, requires_verification, invalid_email, bounced]
+        external_id:            { type: string }
+
+    CustomerUpdate:
+      type: object
+      description: Any subset of editable fields. All optional.
+      properties:
+        name:                   { type: string }
+        first_name:             { type: string }
+        last_name:              { type: string }
+        phone:                  { type: string }
+        document:               { type: string }
+        document_type:          { type: string }
+        city:                   { type: string }
+        region:                 { type: string }
+        country:                { type: string }
+        email_marketing_status:
+          type: string
+          enum: [subscribed, unsubscribed, archived, requires_verification, invalid_email, bounced]
+
+    Product:
+      type: object
+      required: [id, name, status, created_at]
+      properties:
+        id:           { type: string, example: prod_9f20e7a3b8c1 }
+        name:         { type: string }
+        description:  { type: string, nullable: true }
+        cover_url:    { type: string, nullable: true }
+        status:       { type: string, enum: [draft, active, archived] }
+        benefit:      { type: string, nullable: true, enum: [files, courses, links, null] }
+        unit_amount:  { type: integer, description: Minor units (cents) }
+        currency:     { type: string, enum: [USD, BRL] }
+        test_mode:    { type: boolean }
+        sort_order:   { type: integer }
+        created_at:   { type: string, format: date-time }
+        updated_at:   { type: string, format: date-time }
+
+    ProductCreate:
+      type: object
+      required: [name]
+      properties:
+        name:         { type: string }
+        description:  { type: string }
+        cover_url:    { type: string }
+        status:       { type: string, enum: [draft, active, archived], default: draft }
+        benefit:      { type: string, enum: [files, courses, links] }
+        unit_amount:  { type: integer, default: 0 }
+        currency:     { type: string, enum: [USD, BRL], default: BRL }
+        test_mode:    { type: boolean, default: false }
+
+    ProductUpdate:
+      type: object
+      description: Any subset of editable fields. All optional.
+      properties:
+        name:         { type: string }
+        description:  { type: string }
+        cover_url:    { type: string }
+        status:       { type: string, enum: [draft, active, archived] }
+        benefit:      { type: string, enum: [files, courses, links] }
+        unit_amount:  { type: integer }
+        currency:     { type: string, enum: [USD, BRL] }
+        test_mode:    { type: boolean }
+        sort_order:   { type: integer }
+
+    Order:
+      type: object
+      required: [id, status, source, created_at]
+      properties:
+        id:                      { type: string, example: ordr_1a2b3c4d5e6f }
+        order_number:            { type: integer, nullable: true }
+        type:                    { type: string, enum: [one_time, subscription] }
+        status:                  { type: string, enum: [pending, completed, approved, refunded, cancelled] }
+        source:                  { type: string, example: custom }
+        unit_amount:             { type: integer }
+        currency:                { type: string, enum: [USD, BRL] }
+        customer:
+          type: object
+          properties:
+            id:    { type: string, nullable: true, description: "null when the customer was deleted" }
+            email: { type: string, nullable: true }
+            name:  { type: string, nullable: true }
+        product:
+          type: object
+          properties:
+            id:   { type: string, nullable: true }
+            name: { type: string, nullable: true }
+        is_order_bump:           { type: boolean }
+        gateway_external_id:     { type: string, nullable: true }
+        gateway_provider:        { type: string, nullable: true }
+        gateway_order_created_at: { type: string, format: date-time, nullable: true }
+        effective_order_at:
+          type: string
+          format: date-time
+          description: Canonical order date (gateway_order_created_at when present, otherwise created_at). This is what list endpoints sort and filter by.
+        created_at:              { type: string, format: date-time }
+        updated_at:              { type: string, format: date-time }
+
+    OrderCreate:
+      type: object
+      required: [product_id]
+      properties:
+        product_id:
+          type: string
+          pattern: '^prod_[a-z0-9]+$'
+          example: prod_9f20e7a3b8c1
+        customer_id:
+          type: string
+          pattern: '^cust_[a-z0-9]+$'
+          description: Either `customer_id` or `customer_email` is required.
+        customer_email:
+          type: string
+          format: email
+          description: If the customer does not exist, it is created automatically.
+        customer_name:
+          type: string
+          description: Used only when creating a new customer via `customer_email`.
+        unit_amount:
+          type: integer
+          default: 0
+        currency:
+          type: string
+          enum: [USD, BRL]
+          default: BRL
+        status:
+          type: string
+          enum: [pending, completed, approved, refunded, cancelled]
+          default: completed
+        type:
+          type: string
+          enum: [one_time, subscription]
+          default: one_time
+        gateway_external_id:
+          type: string
+        effective_order_at:
+          type: string
+          format: date-time
+
+    OrderUpdate:
+      type: object
+      description: Only status and effective_order_at are editable.
+      properties:
+        status:
+          type: string
+          enum: [completed, approved, refunded, cancelled]
+        effective_order_at:
+          type: string
+          format: date-time
