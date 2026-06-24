@@ -1,8 +1,27 @@
 {
-  "name": "vite_react_shadcn_ts",
-  "private": true,
+  "name": "hubfy",
+  "description": "Open-source platform for creator-owned learning portals, digital products, checkout, customer access, and media delivery.",
+  "private": false,
   "version": "0.1.0",
   "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/hubfy-io/hubfy#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hubfy-io/hubfy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hubfy-io/hubfy/issues"
+  },
+  "keywords": [
+    "learning-management-system",
+    "creator-tools",
+    "digital-products",
+    "supabase",
+    "vite",
+    "react",
+    "tailwindcss"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vite build",
